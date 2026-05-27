@@ -280,6 +280,7 @@ export async function depositSol(
   destinationTokenAccount?: PublicKey,
   referrerTokenAccount?: PublicKey,
   depositAuthority?: PublicKey,
+  ephemeralAddress?: PublicKey,
 ) {
   const fromBalance = await connection.getBalance(from, 'confirmed');
   if (fromBalance < lamports) {
@@ -294,18 +295,21 @@ export async function depositSol(
   const stakePoolProgramId = getStakePoolProgramId(connection.rpcEndpoint);
   const stakePool = stakePoolAccount.account.data;
 
-  // Ephemeral SOL account just to do the transfer
-  const userSolTransfer = new Keypair();
-  const signers: Signer[] = [userSolTransfer];
+  const signers: Signer[] = [];
   const instructions: TransactionInstruction[] = [];
+
+  let fundingAccount = ephemeralAddress;
+
+  // Ephemeral SOL account just to do the transfer
+  if (!fundingAccount) {
+    const userSolTransfer = Keypair.generate();
+    fundingAccount = userSolTransfer.publicKey;
+    signers.push(userSolTransfer);
+  }
 
   // Create the ephemeral SOL account
   instructions.push(
-    SystemProgram.transfer({
-      fromPubkey: from,
-      toPubkey: userSolTransfer.publicKey,
-      lamports,
-    }),
+    SystemProgram.transfer({ fromPubkey: from, toPubkey: fundingAccount, lamports }),
   );
 
   // Create token account if not specified
@@ -332,7 +336,7 @@ export async function depositSol(
       programId: stakePoolProgramId,
       stakePool: stakePoolAddress,
       reserveStake: stakePool.reserveStake,
-      fundingAccount: userSolTransfer.publicKey,
+      fundingAccount,
       destinationPoolAccount: destinationTokenAccount,
       managerFeeAccount: stakePool.managerFeeAccount,
       referralPoolAccount: referrerTokenAccount ?? destinationTokenAccount,
@@ -362,6 +366,7 @@ export async function withdrawStake(
   stakeReceiver?: PublicKey,
   poolTokenAccount?: PublicKey,
   validatorComparator?: (_a: ValidatorAccount, _b: ValidatorAccount) => number,
+  ephemeralSourceTransferAuthority?: PublicKey,
 ) {
   const stakePool = await getStakePoolAccount(connection, stakePoolAddress);
   const stakePoolProgramId = getStakePoolProgramId(connection.rpcEndpoint);
@@ -500,14 +505,20 @@ export async function withdrawStake(
 
   // Construct transaction to withdraw from withdrawAccounts account list
   const instructions: TransactionInstruction[] = [];
-  const userTransferAuthority = Keypair.generate();
+  const signers: Signer[] = [];
 
-  const signers: Signer[] = [userTransferAuthority];
+  let sourceTransferAuthority = ephemeralSourceTransferAuthority;
+
+  if (!sourceTransferAuthority) {
+    const signer = Keypair.generate();
+    signers.push(signer);
+    sourceTransferAuthority = signer.publicKey;
+  }
 
   instructions.push(
     createApproveInstruction(
       poolTokenAccount,
-      userTransferAuthority.publicKey,
+      sourceTransferAuthority,
       tokenOwner,
       poolAmount.toNumber(),
     ),
@@ -557,7 +568,7 @@ export async function withdrawStake(
         validatorStake: withdrawAccount.stakeAddress,
         destinationStake: stakeToReceive,
         destinationStakeAuthority: tokenOwner,
-        sourceTransferAuthority: userTransferAuthority.publicKey,
+        sourceTransferAuthority,
         sourcePoolAccount: poolTokenAccount,
         managerFeeAccount: stakePool.account.data.managerFeeAccount,
         poolMint: stakePool.account.data.poolMint,
@@ -597,6 +608,7 @@ export async function withdrawSol(
   solReceiver: PublicKey,
   amount: number,
   solWithdrawAuthority?: PublicKey,
+  ephemeralSourceTransferAuthority?: PublicKey,
 ) {
   const stakePool = await getStakePoolAccount(connection, stakePoolAddress);
   const stakePoolProgramId = getStakePoolProgramId(connection.rpcEndpoint);
@@ -619,20 +631,22 @@ export async function withdrawSol(
 
   // Construct transaction to withdraw from withdrawAccounts account list
   const instructions: TransactionInstruction[] = [];
-  const userTransferAuthority = Keypair.generate();
-  const signers: Signer[] = [userTransferAuthority];
+  const signers: Signer[] = [];
+
+  let sourceTransferAuthority = ephemeralSourceTransferAuthority;
+
+  if (!sourceTransferAuthority) {
+    const signer = Keypair.generate();
+    signers.push(signer);
+    sourceTransferAuthority = signer.publicKey;
+  }
 
   instructions.push(
-    createApproveInstruction(
-      poolTokenAccount,
-      userTransferAuthority.publicKey,
-      tokenOwner,
-      poolAmount,
-    ),
+    createApproveInstruction(poolTokenAccount, sourceTransferAuthority, tokenOwner, poolAmount),
   );
 
-  const poolWithdrawAuthority = await findWithdrawAuthorityProgramAddress(
-    stakePoolProgramId,
+  const poolWithdrawAuthority = findWithdrawAuthorityProgramAddress(
+    STAKE_POOL_PROGRAM_ID,
     stakePoolAddress,
   );
 
@@ -654,7 +668,7 @@ export async function withdrawSol(
     withdrawAuthority: poolWithdrawAuthority,
     reserveStake: stakePool.account.data.reserveStake,
     sourcePoolAccount: poolTokenAccount,
-    sourceTransferAuthority: userTransferAuthority.publicKey,
+    sourceTransferAuthority,
     destinationSystemAccount: solReceiver,
     managerFeeAccount: stakePool.account.data.managerFeeAccount,
     poolMint: stakePool.account.data.poolMint,
