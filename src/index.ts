@@ -645,7 +645,7 @@ export async function withdrawSol(
     createApproveInstruction(poolTokenAccount, sourceTransferAuthority, tokenOwner, poolAmount),
   );
 
-  const poolWithdrawAuthority = findWithdrawAuthorityProgramAddress(
+  const poolWithdrawAuthority = await findWithdrawAuthorityProgramAddress(
     STAKE_POOL_PROGRAM_ID,
     stakePoolAddress,
   );
